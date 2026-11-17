@@ -176,6 +176,7 @@ func TestRunCommandResolvesXidGPUUUIDs(t *testing.T) {
 	}
 }
 
+// TestRunCommandXidCleanScanPasses requires evaluated zero-event results rather than collection failures.
 func TestRunCommandXidCleanScanPasses(t *testing.T) {
 	calls := 0
 	a := testApp()

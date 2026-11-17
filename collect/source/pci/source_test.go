@@ -188,3 +188,126 @@ func TestACSAfterPlaceholder(t *testing.T) {
 		}
 	}
 }
+
+// TestReadGPUsFiltersDeviceTypes excludes NICs and other vendors before link reads.
+func TestReadGPUsFiltersDeviceTypes(t *testing.T) {
+	files := fstest.MapFS{
+		Root + "/0000:01:00.0/class":          {Data: []byte("0x030200")},
+		Root + "/0000:01:00.0/vendor":         {Data: []byte("0x10de")},
+		Root + "/0000:01:00.0/max_link_width": {Data: []byte("16")},
+		Root + "/0000:02:00.0/class":          {Data: []byte("0x020000")},
+		Root + "/0000:03:00.0/class":          {Data: []byte("0x030000")},
+		Root + "/0000:03:00.0/vendor":         {Data: []byte("0x1002")},
+	}
+	readings, err := New(files).ReadGPUs(context.Background(), collect.Signals{pcisignals.MaxLinkWidth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readings) != 1 {
+		t.Fatalf("got %d readings, want one NVIDIA GPU", len(readings))
+	}
+	if readings[0].Target.GetPci().GetAddress() != "0000:01:00.0" || readings[0].Failure != nil {
+		t.Fatalf("GPU reading = %+v", readings[0])
+	}
+}
+
+// TestReadGPUsClassificationFailureIsPerDevice preserves readings before and after a malformed device.
+func TestReadGPUsClassificationFailureIsPerDevice(t *testing.T) {
+	for _, tc := range []struct{ name, field, value string }{
+		{"malformed class", "class", "invalid"},
+		{"missing class", "class", ""},
+		{"malformed vendor", "vendor", "invalid"},
+		{"missing vendor", "vendor", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := make(fstest.MapFS)
+			for _, address := range []string{"0000:01:00.0", "0000:02:00.0", "0000:03:00.0"} {
+				base := Root + "/" + address + "/"
+				for field, value := range map[string]string{"class": "0x030200", "vendor": "0x10de", "max_link_width": "16", "max_link_speed": "32.0 GT/s PCIe"} {
+					files[base+field] = &fstest.MapFile{Data: []byte(value)}
+				}
+			}
+			bad := Root + "/0000:02:00.0/" + tc.field
+			if tc.value == "" {
+				delete(files, bad)
+			} else {
+				files[bad] = &fstest.MapFile{Data: []byte(tc.value)}
+			}
+			readings, err := New(files).ReadGPUs(context.Background(), collect.Signals{pcisignals.MaxLinkWidth, pcisignals.MaxLinkGeneration})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(readings) != 6 {
+				t.Fatalf("got %d readings, want 6", len(readings))
+			}
+			failures, healthy := 0, 0
+			for _, reading := range readings {
+				if reading.Target.GetPci().GetAddress() == "0000:02:00.0" {
+					if reading.Failure == nil || reading.Value != nil {
+						t.Fatalf("unclassified device reading = %+v, want failure", reading)
+					}
+					failures++
+				} else {
+					if reading.Failure != nil || reading.Value == nil {
+						t.Fatalf("healthy device reading = %+v", reading)
+					}
+					healthy++
+				}
+			}
+			if failures != 2 || healthy != 4 {
+				t.Fatalf("got %d failures and %d healthy readings", failures, healthy)
+			}
+		})
+	}
+}
+
+// TestReadGPUsVirtualFunctions keeps VF capabilities out of physical GPU checks,
+// even when the VF exposes plausible link attributes or its PF link dangles.
+func TestReadGPUsVirtualFunctions(t *testing.T) {
+	for _, marker := range []fstest.MapFile{
+		{Mode: fs.ModeSymlink, Data: []byte("../0000:02:00.0")},
+		{Mode: fs.ModeSymlink, Data: []byte("../0000:ff:00.0")},
+	} {
+		files := fstest.MapFS{
+			Root + "/0000:01:00.0/class":          {Data: []byte("0x030200")},
+			Root + "/0000:01:00.0/vendor":         {Data: []byte("0x10de")},
+			Root + "/0000:01:00.0/max_link_width": {Data: []byte("16")},
+			Root + "/0000:01:00.0/max_link_speed": {Data: []byte("32.0 GT/s PCIe")},
+			Root + "/0000:01:00.0/physfn":         &marker,
+			Root + "/0000:02:00.0/class":          {Data: []byte("0x030200")},
+			Root + "/0000:02:00.0/vendor":         {Data: []byte("0x10de")},
+			Root + "/0000:02:00.0/max_link_width": {Data: []byte("16")},
+			Root + "/0000:02:00.0/max_link_speed": {Data: []byte("32.0 GT/s PCIe")},
+		}
+		selected := collect.Signals{pcisignals.MaxLinkWidth, pcisignals.MaxLinkGeneration}
+		readings, err := New(files).ReadGPUs(context.Background(), selected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(readings) != 4 {
+			t.Fatalf("readings = %d, want 4", len(readings))
+		}
+		for _, reading := range readings {
+			if reading.Failure != nil {
+				t.Fatalf("unexpected failure: %+v", reading)
+			}
+			if reading.Target.GetPci().GetAddress() == "0000:01:00.0" {
+				if reading.Value != nil || reading.NoValue.GetReason() != observation.NoValueReasonNotSupported {
+					t.Fatalf("VF reading = %+v, want unsupported", reading)
+				}
+			} else if reading.Value == nil {
+				t.Fatalf("PF reading = %+v, want value", reading)
+			}
+		}
+		// Generic PCI collection still exposes the raw VF attributes.
+		raw, err := New(files).Read(context.Background(), selected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, reading := range raw {
+			if reading.Value == nil {
+				t.Fatalf("raw reading = %+v, want value", reading)
+			}
+		}
+	}
+}

@@ -97,6 +97,7 @@ func TestRunCommandCollectsLinkFlapThroughBridge(t *testing.T) {
 	}
 }
 
+// TestRunCommandLinkFlapCleanScanPasses distinguishes an observed quiet journal from missing data.
 func TestRunCommandLinkFlapCleanScanPasses(t *testing.T) {
 	calls := 0
 	if got := runLinkFlapApp(t, linkFlapApp(&calls, linkFlapAppMarker()), exitOK); got.Severity != health.Pass {

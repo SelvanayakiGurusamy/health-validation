@@ -23,6 +23,7 @@ import (
 	"github.com/dsx-ai-factory/health-validation/catalog/infiniband"
 	"github.com/dsx-ai-factory/health-validation/catalog/node"
 	"github.com/dsx-ai-factory/health-validation/catalog/nvlink"
+	"github.com/dsx-ai-factory/health-validation/catalog/pcie"
 	"github.com/dsx-ai-factory/health-validation/catalog/xid"
 	"github.com/dsx-ai-factory/health-validation/collect/observation"
 	gpusignals "github.com/dsx-ai-factory/health-validation/collect/signals/gpu"
@@ -155,6 +156,7 @@ func roundTripFixture() []health.Measurement {
 			ComputeProcessCount: 1, ComputeProcessCmdlines: "123 'python train.py'",
 		},
 		partialGPU,
+		pcie.PCIeMeasurement{GPUID: "GPU-0", PCIeMaxLinkWidth: 16, PCIeMaxLinkGeneration: 5},
 		gpu.ErroredGPU("gpu", errors.New("nvml device handle failed"), gpu.MeasurementSignals()...),
 		link,
 		cpu.CPUMeasurement{PossibleCPUCount: 64, OnlineCPUCount: 63, NUMANodeCount: 2},
